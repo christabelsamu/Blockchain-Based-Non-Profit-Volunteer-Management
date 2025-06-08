@@ -1,113 +1,72 @@
-;; Skill Development Contract
-;; This contract tracks volunteer skill development
+;; Recognition Program Contract
+;; This contract recognizes volunteer contributions
 
 (define-data-var admin principal tx-sender)
 
-;; Map to store skills
-(define-map skills
-  { skill-id: uint }
+;; Map to store badges
+(define-map badges
+  { badge-id: uint }
   {
     name: (string-utf8 50),
     description: (string-utf8 200),
-    category: (string-utf8 50)
+    image-url: (string-utf8 200),
+    criteria: (string-utf8 500)
   }
 )
 
-;; Map to track volunteer skills
-(define-map volunteer-skills
-  { volunteer-id: principal, skill-id: uint }
+;; Map to track volunteer badges
+(define-map volunteer-badges
+  { volunteer-id: principal, badge-id: uint }
   {
-    level: uint, ;; 1-5 representing beginner to expert
-    endorsements: uint,
-    last-updated: uint
+    awarded-at: uint,
+    awarded-by: principal
   }
 )
 
-;; Map to track endorsements
-(define-map endorsements
-  { volunteer-id: principal, skill-id: uint, endorser: principal }
-  { endorsed: bool }
+;; Map to track volunteer points
+(define-map volunteer-points
+  { volunteer-id: principal }
+  { points: uint }
 )
 
-;; Counter for skill IDs
-(define-data-var skill-counter uint u1)
+;; Counter for badge IDs
+(define-data-var badge-counter uint u1)
 
-;; Admin function to add a new skill
-(define-public (add-skill (name (string-utf8 50)) (description (string-utf8 200)) (category (string-utf8 50)))
+;; Admin function to create a new badge
+(define-public (create-badge
+  (name (string-utf8 50))
+  (description (string-utf8 200))
+  (image-url (string-utf8 200))
+  (criteria (string-utf8 500)))
   (begin
-    (asserts! (is-eq tx-sender (var-get admin)) (err u403)) ;; Only admin can add skills
-    (let ((skill-id (var-get skill-counter)))
-      (map-set skills
-        { skill-id: skill-id }
+    (asserts! (is-eq tx-sender (var-get admin)) (err u403)) ;; Only admin can create badges
+    (let ((badge-id (var-get badge-counter)))
+      (map-set badges
+        { badge-id: badge-id }
         {
           name: name,
           description: description,
-          category: category
+          image-url: image-url,
+          criteria: criteria
         }
       )
-      (var-set skill-counter (+ skill-id u1))
-      (ok skill-id)
+      (var-set badge-counter (+ badge-id u1))
+      (ok badge-id)
     )
   )
 )
 
-;; Public function for volunteers to add a skill to their profile
-(define-public (add-volunteer-skill (skill-id uint) (level uint))
+;; Admin or organization function to award a badge to a volunteer
+(define-public (award-badge (volunteer-id principal) (badge-id uint))
   (begin
-    (asserts! (<= level u5) (err u400)) ;; Level must be between 1-5
-    (asserts! (>= level u1) (err u400))
-    (asserts! (is-some (map-get? skills { skill-id: skill-id })) (err u404)) ;; Skill not found
+    (asserts! (is-some (map-get? badges { badge-id: badge-id })) (err u404)) ;; Badge not found
+    (asserts! (is-none (map-get? volunteer-badges { volunteer-id: volunteer-id, badge-id: badge-id })) (err u409)) ;; Already awarded
 
-    (ok (map-set volunteer-skills
-      { volunteer-id: tx-sender, skill-id: skill-id }
+    (map-set volunteer-badges
+      { volunteer-id: volunteer-id, badge-id: badge-id }
       {
-        level: level,
-        endorsements: u0,
-        last-updated: block-height
-      }
-    ))
-  )
-)
-
-;; Public function to update skill level
-(define-public (update-skill-level (skill-id uint) (new-level uint))
-  (let ((skill (map-get? volunteer-skills { volunteer-id: tx-sender, skill-id: skill-id })))
-    (asserts! (is-some skill) (err u404)) ;; Skill not found for volunteer
-    (asserts! (<= new-level u5) (err u400)) ;; Level must be between 1-5
-    (asserts! (>= new-level u1) (err u400))
-
-    (ok (map-set volunteer-skills
-      { volunteer-id: tx-sender, skill-id: skill-id }
-      {
-        level: new-level,
-        endorsements: (get endorsements (unwrap-panic skill)),
-        last-updated: block-height
-      }
-    ))
-  )
-)
-
-;; Public function to endorse a volunteer's skill
-(define-public (endorse-skill (volunteer-id principal) (skill-id uint))
-  (let (
-    (skill (map-get? volunteer-skills { volunteer-id: volunteer-id, skill-id: skill-id }))
-    (existing-endorsement (map-get? endorsements { volunteer-id: volunteer-id, skill-id: skill-id, endorser: tx-sender }))
-  )
-    (asserts! (not (is-eq volunteer-id tx-sender)) (err u400)) ;; Cannot endorse yourself
-    (asserts! (is-some skill) (err u404)) ;; Skill not found for volunteer
-    (asserts! (is-none existing-endorsement) (err u409)) ;; Already endorsed
-
-    (map-set endorsements
-      { volunteer-id: volunteer-id, skill-id: skill-id, endorser: tx-sender }
-      { endorsed: true }
-    )
-
-    (map-set volunteer-skills
-      { volunteer-id: volunteer-id, skill-id: skill-id }
-      {
-        level: (get level (unwrap-panic skill)),
-        endorsements: (+ (get endorsements (unwrap-panic skill)) u1),
-        last-updated: block-height
+        awarded-at: block-height,
+        awarded-by: tx-sender
       }
     )
 
@@ -115,12 +74,33 @@
   )
 )
 
-;; Public function to get skill details
-(define-read-only (get-skill (skill-id uint))
-  (map-get? skills { skill-id: skill-id })
+;; Admin or organization function to award points to a volunteer
+(define-public (award-points (volunteer-id principal) (points-to-add uint))
+  (let ((current-points (default-to { points: u0 } (map-get? volunteer-points { volunteer-id: volunteer-id }))))
+    (map-set volunteer-points
+      { volunteer-id: volunteer-id }
+      { points: (+ (get points current-points) points-to-add) }
+    )
+    (ok (+ (get points current-points) points-to-add))
+  )
 )
 
-;; Public function to get volunteer skill details
-(define-read-only (get-volunteer-skill (volunteer-id principal) (skill-id uint))
-  (map-get? volunteer-skills { volunteer-id: volunteer-id, skill-id: skill-id })
+;; Public function to get badge details
+(define-read-only (get-badge (badge-id uint))
+  (map-get? badges { badge-id: badge-id })
+)
+
+;; Public function to check if a volunteer has a badge
+(define-read-only (has-badge (volunteer-id principal) (badge-id uint))
+  (is-some (map-get? volunteer-badges { volunteer-id: volunteer-id, badge-id: badge-id }))
+)
+
+;; Public function to get volunteer points
+(define-read-only (get-points (volunteer-id principal))
+  (let ((points (map-get? volunteer-points { volunteer-id: volunteer-id })))
+    (if (is-some points)
+      (get points (unwrap-panic points))
+      u0
+    )
+  )
 )
